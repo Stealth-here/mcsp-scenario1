@@ -1,0 +1,200 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: build-image-task
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    task-type: build
+  annotations:
+    description: "Build and push container image using Buildah"
+spec:
+  params:
+    - name: image-name
+      type: string
+      description: Reference of the image to build
+    
+    - name: image-tag
+      type: string
+      description: Tag for the image
+      default: latest
+    
+    - name: dockerfile-path
+      type: string
+      description: Path to the Dockerfile
+      default: ./Dockerfile
+    
+    - name: context-path
+      type: string
+      description: Path to the build context
+      default: .
+    
+    - name: build-args
+      type: array
+      description: Build arguments for the Dockerfile
+      default: []
+    
+    - name: format
+      type: string
+      description: Format of the built container (oci or docker)
+      default: oci
+    
+    - name: storage-driver
+      type: string
+      description: Storage driver to use
+      default: vfs
+    
+    - name: tls-verify
+      type: string
+      description: Verify TLS certificates
+      default: "true"
+    
+    - name: push-to-registry
+      type: string
+      description: Push image to registry after build
+      default: "true"
+
+  workspaces:
+    - name: source
+      description: Workspace containing the source code
+    
+    - name: dockerconfig
+      description: Docker config for registry authentication
+      optional: true
+
+  results:
+    - name: image-digest
+      description: Digest of the image just built
+    
+    - name: image-url
+      description: Full URL of the built image
+
+  steps:
+    - name: build-and-push
+      image: registry.redhat.io/rhel8/buildah:latest
+      workingDir: $(workspaces.source.path)
+      securityContext:
+        privileged: true
+      env:
+        - name: STORAGE_DRIVER
+          value: $(params.storage-driver)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Building Container Image"
+        echo "==================================="
+        echo "Image: $(params.image-name):$(params.image-tag)"
+        echo "Dockerfile: $(params.dockerfile-path)"
+        echo "Context: $(params.context-path)"
+        echo "Format: $(params.format)"
+        echo "==================================="
+        
+        # Build the image
+        buildah --storage-driver=${STORAGE_DRIVER} bud \
+          --format=$(params.format) \
+          --tls-verify=$(params.tls-verify) \
+          --no-cache \
+          -f $(params.dockerfile-path) \
+          -t $(params.image-name):$(params.image-tag) \
+          $(params.context-path)
+        
+        echo "Image built successfully!"
+        
+        # Push to registry if enabled
+        if [ "$(params.push-to-registry)" = "true" ]; then
+          echo "Pushing image to registry..."
+          
+          # Use docker config if provided
+          if [ -d "$(workspaces.dockerconfig.path)" ]; then
+            export REGISTRY_AUTH_FILE="$(workspaces.dockerconfig.path)/config.json"
+          fi
+          
+          buildah --storage-driver=${STORAGE_DRIVER} push \
+            --tls-verify=$(params.tls-verify) \
+            --digestfile /tmp/image-digest \
+            $(params.image-name):$(params.image-tag) \
+            docker://$(params.image-name):$(params.image-tag)
+          
+          echo "Image pushed successfully!"
+          
+          # Save digest
+          cat /tmp/image-digest | tee $(results.image-digest.path)
+          echo "$(params.image-name):$(params.image-tag)" | tee $(results.image-url.path)
+        else
+          echo "Skipping push to registry (push-to-registry=false)"
+          echo "n/a" | tee $(results.image-digest.path)
+          echo "$(params.image-name):$(params.image-tag)" | tee $(results.image-url.path)
+        fi
+        
+        echo "==================================="
+        echo "Build Complete"
+        echo "==================================="
+
+    - name: verify-image
+      image: registry.redhat.io/rhel8/buildah:latest
+      securityContext:
+        privileged: true
+      env:
+        - name: STORAGE_DRIVER
+          value: $(params.storage-driver)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Verifying Built Image"
+        echo "==================================="
+        
+        # Inspect the image
+        buildah --storage-driver=${STORAGE_DRIVER} inspect \
+          $(params.image-name):$(params.image-tag) || true
+        
+        echo "==================================="
+        echo "Image Details:"
+        buildah --storage-driver=${STORAGE_DRIVER} images | grep $(params.image-tag) || true
+        echo "==================================="
+
+    - name: tag-additional
+      image: registry.redhat.io/rhel8/buildah:latest
+      securityContext:
+        privileged: true
+      env:
+        - name: STORAGE_DRIVER
+          value: $(params.storage-driver)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Tagging Additional Tags"
+        echo "==================================="
+        
+        # Tag as latest if not already
+        if [ "$(params.image-tag)" != "latest" ]; then
+          echo "Tagging as latest..."
+          buildah --storage-driver=${STORAGE_DRIVER} tag \
+            $(params.image-name):$(params.image-tag) \
+            $(params.image-name):latest
+          
+          if [ "$(params.push-to-registry)" = "true" ]; then
+            if [ -d "$(workspaces.dockerconfig.path)" ]; then
+              export REGISTRY_AUTH_FILE="$(workspaces.dockerconfig.path)/config.json"
+            fi
+            
+            buildah --storage-driver=${STORAGE_DRIVER} push \
+              --tls-verify=$(params.tls-verify) \
+              $(params.image-name):latest \
+              docker://$(params.image-name):latest
+            
+            echo "Latest tag pushed successfully!"
+          fi
+        fi
+        
+        echo "==================================="
+        echo "Tagging Complete"
+        echo "==================================="
+
+# Made with Bob

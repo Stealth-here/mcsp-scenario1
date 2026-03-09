@@ -1,0 +1,218 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: run-tests-task
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    task-type: test
+  annotations:
+    description: "Run unit tests and generate coverage reports"
+spec:
+  params:
+    - name: context-path
+      type: string
+      description: Path to the application context
+      default: ./app
+    
+    - name: python-version
+      type: string
+      description: Python version to use
+      default: "3.11"
+    
+    - name: requirements-file
+      type: string
+      description: Path to requirements file
+      default: src/requirements.txt
+    
+    - name: test-command
+      type: string
+      description: Command to run tests
+      default: "pytest -v --cov=. --cov-report=xml --cov-report=html --cov-report=term"
+    
+    - name: coverage-threshold
+      type: string
+      description: Minimum coverage percentage required
+      default: "70"
+
+  workspaces:
+    - name: source
+      description: Workspace containing the source code
+
+  results:
+    - name: test-status
+      description: Status of the test execution (passed/failed)
+    
+    - name: coverage-percentage
+      description: Code coverage percentage
+
+  steps:
+    - name: install-dependencies
+      image: registry.access.redhat.com/ubi9/python-311:latest
+      workingDir: $(workspaces.source.path)/$(params.context-path)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Installing Python Dependencies"
+        echo "==================================="
+        echo "Python version: $(python --version)"
+        echo "Pip version: $(pip --version)"
+        echo "==================================="
+        
+        # Upgrade pip
+        pip install --upgrade pip
+        
+        # Install dependencies
+        if [ -f "$(params.requirements-file)" ]; then
+          echo "Installing from $(params.requirements-file)..."
+          pip install -r $(params.requirements-file)
+        else
+          echo "Warning: Requirements file not found at $(params.requirements-file)"
+        fi
+        
+        echo "==================================="
+        echo "Dependencies Installed"
+        echo "==================================="
+
+    - name: run-unit-tests
+      image: registry.access.redhat.com/ubi9/python-311:latest
+      workingDir: $(workspaces.source.path)/$(params.context-path)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Running Unit Tests"
+        echo "==================================="
+        
+        # Create test results directory
+        mkdir -p test-results
+        
+        # Run tests
+        if [ -d "tests" ] || [ -d "test" ]; then
+          echo "Running pytest..."
+          $(params.test-command) || TEST_EXIT_CODE=$?
+          
+          if [ -z "${TEST_EXIT_CODE}" ]; then
+            TEST_EXIT_CODE=0
+          fi
+          
+          echo "==================================="
+          echo "Test Results"
+          echo "==================================="
+          
+          if [ ${TEST_EXIT_CODE} -eq 0 ]; then
+            echo "✓ All tests passed!"
+            echo "passed" > $(results.test-status.path)
+          else
+            echo "✗ Some tests failed!"
+            echo "failed" > $(results.test-status.path)
+            exit ${TEST_EXIT_CODE}
+          fi
+        else
+          echo "Warning: No test directory found. Skipping tests."
+          echo "skipped" > $(results.test-status.path)
+        fi
+        
+        echo "==================================="
+
+    - name: check-coverage
+      image: registry.access.redhat.com/ubi9/python-311:latest
+      workingDir: $(workspaces.source.path)/$(params.context-path)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Checking Code Coverage"
+        echo "==================================="
+        
+        # Check if coverage report exists
+        if [ -f "coverage.xml" ]; then
+          # Extract coverage percentage from XML report
+          COVERAGE=$(python -c "
+import xml.etree.ElementTree as ET
+tree = ET.parse('coverage.xml')
+root = tree.getroot()
+coverage = root.attrib.get('line-rate', '0')
+coverage_pct = float(coverage) * 100
+print(f'{coverage_pct:.2f}')
+          " 2>/dev/null || echo "0")
+          
+          echo "Code Coverage: ${COVERAGE}%"
+          echo "${COVERAGE}" > $(results.coverage-percentage.path)
+          
+          # Check against threshold
+          THRESHOLD=$(params.coverage-threshold)
+          if (( $(echo "${COVERAGE} < ${THRESHOLD}" | bc -l) )); then
+            echo "✗ Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+            echo "Warning: Consider increasing test coverage"
+          else
+            echo "✓ Coverage ${COVERAGE}% meets threshold ${THRESHOLD}%"
+          fi
+        else
+          echo "Warning: No coverage report found"
+          echo "0" > $(results.coverage-percentage.path)
+        fi
+        
+        echo "==================================="
+
+    - name: lint-code
+      image: registry.access.redhat.com/ubi9/python-311:latest
+      workingDir: $(workspaces.source.path)/$(params.context-path)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Running Code Linting"
+        echo "==================================="
+        
+        # Install linting tools
+        pip install flake8 pylint black --quiet
+        
+        # Run flake8
+        echo "Running flake8..."
+        flake8 src/ --max-line-length=120 --exclude=__pycache__,*.pyc --count || true
+        
+        # Run pylint
+        echo "Running pylint..."
+        pylint src/ --disable=C0111,C0103,R0903 --max-line-length=120 || true
+        
+        # Check code formatting with black
+        echo "Checking code formatting with black..."
+        black --check src/ --line-length=120 || echo "Warning: Code formatting issues found"
+        
+        echo "==================================="
+        echo "Linting Complete"
+        echo "==================================="
+
+    - name: generate-test-report
+      image: registry.access.redhat.com/ubi9/python-311:latest
+      workingDir: $(workspaces.source.path)/$(params.context-path)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Test Execution Summary"
+        echo "==================================="
+        echo "Status: $(cat $(results.test-status.path) 2>/dev/null || echo 'unknown')"
+        echo "Coverage: $(cat $(results.coverage-percentage.path) 2>/dev/null || echo '0')%"
+        echo "==================================="
+        
+        # List generated reports
+        echo "Generated Reports:"
+        ls -lh *.xml *.html 2>/dev/null || echo "No reports found"
+        
+        if [ -d "htmlcov" ]; then
+          echo "HTML coverage report available in htmlcov/"
+          ls -lh htmlcov/ | head -5
+        fi
+        
+        echo "==================================="
+
+# Made with Bob

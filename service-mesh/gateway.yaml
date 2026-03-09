@@ -1,0 +1,32 @@
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: saas-customer-portal-gateway
+  namespace: saas-app-prod
+  labels:
+    app: saas-customer-portal
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - saas-portal.example.com
+        - www.saas-portal.example.com
+      tls:
+        httpsRedirect: true
+    
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - saas-portal.example.com
+        - www.saas-portal.example.com
+      tls:
+        mode: SIMPLE
+        credentialName: saas-customer-portal-tls

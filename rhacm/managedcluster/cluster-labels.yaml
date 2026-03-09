@@ -1,0 +1,79 @@
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: cluster-dev-us-east-1
+  labels:
+    environment: dev
+    region: us-east-1
+    zone: us-east-1a
+    vendor: OpenShift
+    version: "4.14"
+    app: saas-customer-portal
+    tier: development
+spec:
+  hubAcceptsClient: true
+
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: cluster-staging-us-west-2
+  labels:
+    environment: staging
+    region: us-west-2
+    zone: us-west-2a
+    vendor: OpenShift
+    version: "4.14"
+    app: saas-customer-portal
+    tier: pre-production
+spec:
+  hubAcceptsClient: true
+
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: cluster-prod-us-east-1
+  labels:
+    environment: production
+    region: us-east-1
+    zone: us-east-1a
+    vendor: OpenShift
+    version: "4.14"
+    app: saas-customer-portal
+    tier: premium
+spec:
+  hubAcceptsClient: true
+
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: cluster-prod-us-west-2
+  labels:
+    environment: production
+    region: us-west-2
+    zone: us-west-2a
+    vendor: OpenShift
+    version: "4.14"
+    app: saas-customer-portal
+    tier: premium
+spec:
+  hubAcceptsClient: true
+
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: cluster-prod-eu-west-1
+  labels:
+    environment: production
+    region: eu-west-1
+    zone: eu-west-1a
+    vendor: OpenShift
+    version: "4.14"
+    app: saas-customer-portal
+    tier: enterprise
+spec:
+  hubAcceptsClient: true

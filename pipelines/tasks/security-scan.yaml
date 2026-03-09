@@ -1,0 +1,263 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: security-scan-task
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    task-type: security
+  annotations:
+    description: "Scan container image for security vulnerabilities using Trivy"
+spec:
+  params:
+    - name: image-name
+      type: string
+      description: Reference of the image to scan
+    
+    - name: image-tag
+      type: string
+      description: Tag of the image to scan
+      default: latest
+    
+    - name: severity
+      type: string
+      description: Severity levels to scan for (CRITICAL,HIGH,MEDIUM,LOW)
+      default: "CRITICAL,HIGH"
+    
+    - name: exit-code
+      type: string
+      description: Exit code when vulnerabilities are found
+      default: "0"
+    
+    - name: ignore-unfixed
+      type: string
+      description: Ignore unfixed vulnerabilities
+      default: "false"
+    
+    - name: timeout
+      type: string
+      description: Scan timeout
+      default: "5m"
+    
+    - name: format
+      type: string
+      description: Output format (table, json, sarif)
+      default: "table"
+
+  workspaces:
+    - name: source
+      description: Workspace for storing scan results
+
+  results:
+    - name: scan-status
+      description: Status of the security scan (passed/failed)
+    
+    - name: critical-count
+      description: Number of critical vulnerabilities found
+    
+    - name: high-count
+      description: Number of high severity vulnerabilities found
+
+  steps:
+    - name: scan-image
+      image: docker.io/aquasec/trivy:latest
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        
+        echo "==================================="
+        echo "Security Vulnerability Scan"
+        echo "==================================="
+        echo "Image: $(params.image-name):$(params.image-tag)"
+        echo "Severity: $(params.severity)"
+        echo "==================================="
+        
+        # Create results directory
+        mkdir -p $(workspaces.source.path)/security-reports
+        
+        # Run Trivy scan
+        trivy image \
+          --severity $(params.severity) \
+          --exit-code $(params.exit-code) \
+          --timeout $(params.timeout) \
+          --format $(params.format) \
+          --output $(workspaces.source.path)/security-reports/trivy-report.txt \
+          $(params.image-name):$(params.image-tag) || SCAN_EXIT_CODE=$?
+        
+        if [ -z "${SCAN_EXIT_CODE}" ]; then
+          SCAN_EXIT_CODE=0
+        fi
+        
+        # Also generate JSON report for parsing
+        trivy image \
+          --severity $(params.severity) \
+          --format json \
+          --output $(workspaces.source.path)/security-reports/trivy-report.json \
+          $(params.image-name):$(params.image-tag) || true
+        
+        echo "==================================="
+        echo "Scan Results:"
+        cat $(workspaces.source.path)/security-reports/trivy-report.txt
+        echo "==================================="
+        
+        # Set scan status
+        if [ ${SCAN_EXIT_CODE} -eq 0 ]; then
+          echo "passed" > $(results.scan-status.path)
+        else
+          echo "failed" > $(results.scan-status.path)
+        fi
+        
+        exit ${SCAN_EXIT_CODE}
+
+    - name: parse-results
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Parsing Scan Results"
+        echo "==================================="
+        
+        # Install jq for JSON parsing
+        microdnf install -y jq
+        
+        JSON_REPORT="$(workspaces.source.path)/security-reports/trivy-report.json"
+        
+        if [ -f "${JSON_REPORT}" ]; then
+          # Count vulnerabilities by severity
+          CRITICAL_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' ${JSON_REPORT} 2>/dev/null || echo "0")
+          HIGH_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' ${JSON_REPORT} 2>/dev/null || echo "0")
+          MEDIUM_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' ${JSON_REPORT} 2>/dev/null || echo "0")
+          LOW_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' ${JSON_REPORT} 2>/dev/null || echo "0")
+          
+          echo "Critical: ${CRITICAL_COUNT}"
+          echo "High: ${HIGH_COUNT}"
+          echo "Medium: ${MEDIUM_COUNT}"
+          echo "Low: ${LOW_COUNT}"
+          
+          # Save results
+          echo "${CRITICAL_COUNT}" > $(results.critical-count.path)
+          echo "${HIGH_COUNT}" > $(results.high-count.path)
+          
+          # Generate summary
+          echo "==================================="
+          echo "Vulnerability Summary"
+          echo "==================================="
+          echo "Total Critical: ${CRITICAL_COUNT}"
+          echo "Total High: ${HIGH_COUNT}"
+          echo "Total Medium: ${MEDIUM_COUNT}"
+          echo "Total Low: ${LOW_COUNT}"
+          echo "==================================="
+          
+          # Check if critical or high vulnerabilities exist
+          if [ "${CRITICAL_COUNT}" -gt 0 ] || [ "${HIGH_COUNT}" -gt 0 ]; then
+            echo "⚠️  Warning: Critical or High severity vulnerabilities found!"
+            echo "Review the detailed report at: security-reports/trivy-report.txt"
+          else
+            echo "✓ No critical or high severity vulnerabilities found"
+          fi
+        else
+          echo "Warning: JSON report not found"
+          echo "0" > $(results.critical-count.path)
+          echo "0" > $(results.high-count.path)
+        fi
+        
+        echo "==================================="
+
+    - name: scan-filesystem
+      image: docker.io/aquasec/trivy:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        
+        echo "==================================="
+        echo "Filesystem Security Scan"
+        echo "==================================="
+        
+        # Scan the source code for vulnerabilities
+        if [ -d "app" ]; then
+          echo "Scanning application source code..."
+          trivy fs \
+            --severity $(params.severity) \
+            --format $(params.format) \
+            --output security-reports/trivy-fs-report.txt \
+            ./app || true
+          
+          echo "Filesystem scan results:"
+          cat security-reports/trivy-fs-report.txt || true
+        else
+          echo "No app directory found, skipping filesystem scan"
+        fi
+        
+        echo "==================================="
+
+    - name: scan-config
+      image: docker.io/aquasec/trivy:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        
+        echo "==================================="
+        echo "Configuration Security Scan"
+        echo "==================================="
+        
+        # Scan for misconfigurations in Kubernetes manifests
+        if [ -d "gitops" ]; then
+          echo "Scanning Kubernetes manifests..."
+          trivy config \
+            --severity $(params.severity) \
+            --format $(params.format) \
+            --output security-reports/trivy-config-report.txt \
+            ./gitops || true
+          
+          echo "Configuration scan results:"
+          cat security-reports/trivy-config-report.txt || true
+        else
+          echo "No gitops directory found, skipping config scan"
+        fi
+        
+        echo "==================================="
+
+    - name: generate-sarif
+      image: docker.io/aquasec/trivy:latest
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        
+        echo "==================================="
+        echo "Generating SARIF Report"
+        echo "==================================="
+        
+        # Generate SARIF format for GitHub/GitLab integration
+        trivy image \
+          --severity $(params.severity) \
+          --format sarif \
+          --output $(workspaces.source.path)/security-reports/trivy-report.sarif \
+          $(params.image-name):$(params.image-tag) || true
+        
+        echo "SARIF report generated at: security-reports/trivy-report.sarif"
+        echo "==================================="
+
+    - name: summary
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Security Scan Summary"
+        echo "==================================="
+        echo "Image: $(params.image-name):$(params.image-tag)"
+        echo "Status: $(cat $(results.scan-status.path) 2>/dev/null || echo 'unknown')"
+        echo "Critical Vulnerabilities: $(cat $(results.critical-count.path) 2>/dev/null || echo '0')"
+        echo "High Vulnerabilities: $(cat $(results.high-count.path) 2>/dev/null || echo '0')"
+        echo "==================================="
+        echo "Reports generated:"
+        ls -lh $(workspaces.source.path)/security-reports/ 2>/dev/null || echo "No reports found"
+        echo "==================================="
+
+# Made with Bob

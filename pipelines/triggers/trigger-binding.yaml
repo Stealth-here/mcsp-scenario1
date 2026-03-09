@@ -1,0 +1,79 @@
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: saas-app-trigger-binding
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+  annotations:
+    description: "Binding for extracting parameters from webhook payload"
+spec:
+  params:
+    # Git repository information
+    - name: git-repo-url
+      value: $(body.repository.clone_url)
+    
+    - name: git-repo-name
+      value: $(body.repository.name)
+    
+    - name: git-revision
+      value: $(body.head_commit.id)
+    
+    - name: git-branch
+      value: $(extensions.git_branch)
+    
+    - name: git-commit-sha-short
+      value: $(extensions.git_commit_sha)
+    
+    - name: git-commit-message
+      value: $(extensions.git_commit_message)
+    
+    - name: git-author
+      value: $(extensions.git_author)
+    
+    # Image information
+    - name: image-tag
+      value: $(body.head_commit.timestamp)-$(extensions.git_commit_sha)
+    
+    # Environment (default to dev for main branch)
+    - name: environment
+      value: dev
+
+---
+# Alternative binding for GitLab
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: saas-app-gitlab-binding
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+spec:
+  params:
+    - name: git-repo-url
+      value: $(body.project.git_http_url)
+    
+    - name: git-repo-name
+      value: $(body.project.name)
+    
+    - name: git-revision
+      value: $(body.checkout_sha)
+    
+    - name: git-branch
+      value: $(body.ref)
+    
+    - name: git-commit-sha-short
+      value: $(body.checkout_sha)
+    
+    - name: git-commit-message
+      value: $(body.commits[0].message)
+    
+    - name: git-author
+      value: $(body.user_name)
+    
+    - name: image-tag
+      value: $(body.commits[0].timestamp)-$(body.checkout_sha)
+    
+    - name: environment
+      value: dev

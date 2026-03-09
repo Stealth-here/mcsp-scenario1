@@ -1,0 +1,187 @@
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: saas-app-event-listener
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+  annotations:
+    description: "Event listener for Git webhook events"
+spec:
+  serviceAccountName: pipeline-sa
+  
+  triggers:
+    - name: github-push-trigger
+      interceptors:
+        # GitHub interceptor to validate webhook
+        - ref:
+            name: github
+          params:
+            - name: secretRef
+              value:
+                secretName: webhook-secret
+                secretKey: secretToken
+            - name: eventTypes
+              value:
+                - push
+                - pull_request
+        
+        # CEL interceptor for filtering
+        - ref:
+            name: cel
+          params:
+            - name: filter
+              value: >
+                (header.match('X-GitHub-Event', 'push') && 
+                 body.ref.startsWith('refs/heads/main')) ||
+                (header.match('X-GitHub-Event', 'pull_request') && 
+                 body.action in ['opened', 'synchronize', 'reopened'])
+            - name: overlays
+              value:
+                - key: git_branch
+                  expression: "body.ref.split('/')[2]"
+                - key: git_commit_sha
+                  expression: "body.head_commit.id.truncate(7)"
+                - key: git_commit_message
+                  expression: "body.head_commit.message"
+                - key: git_author
+                  expression: "body.head_commit.author.name"
+      
+      bindings:
+        - ref: saas-app-trigger-binding
+      
+      template:
+        ref: saas-app-trigger-template
+
+    - name: gitlab-push-trigger
+      interceptors:
+        # GitLab interceptor
+        - ref:
+            name: gitlab
+          params:
+            - name: secretRef
+              value:
+                secretName: webhook-secret
+                secretKey: secretToken
+            - name: eventTypes
+              value:
+                - Push Hook
+                - Merge Request Hook
+        
+        # CEL interceptor for filtering
+        - ref:
+            name: cel
+          params:
+            - name: filter
+              value: >
+                (header.match('X-Gitlab-Event', 'Push Hook') && 
+                 body.ref == 'refs/heads/main') ||
+                (header.match('X-Gitlab-Event', 'Merge Request Hook') && 
+                 body.object_attributes.action in ['open', 'update', 'reopen'])
+      
+      bindings:
+        - ref: saas-app-trigger-binding
+      
+      template:
+        ref: saas-app-trigger-template
+
+    - name: generic-webhook-trigger
+      interceptors:
+        # Generic webhook without validation (for testing)
+        - ref:
+            name: cel
+          params:
+            - name: filter
+              value: "true"
+      
+      bindings:
+        - ref: saas-app-trigger-binding
+      
+      template:
+        ref: saas-app-trigger-template
+
+  resources:
+    kubernetesResource:
+      serviceType: ClusterIP
+      spec:
+        template:
+          spec:
+            serviceAccountName: pipeline-sa
+            containers:
+              - name: event-listener
+                resources:
+                  requests:
+                    memory: "64Mi"
+                    cpu: "100m"
+                  limits:
+                    memory: "128Mi"
+                    cpu: "200m"
+
+---
+# Route to expose the EventListener (OpenShift)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: saas-app-webhook
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    eventlistener: saas-app-event-listener
+  annotations:
+    description: "Webhook endpoint for triggering pipelines"
+spec:
+  to:
+    kind: Service
+    name: el-saas-app-event-listener
+    weight: 100
+  port:
+    targetPort: http-listener
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+
+---
+# Service for EventListener (created automatically, but can be customized)
+apiVersion: v1
+kind: Service
+metadata:
+  name: el-saas-app-event-listener
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    eventlistener: saas-app-event-listener
+spec:
+  ports:
+    - name: http-listener
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    eventlistener: saas-app-event-listener
+  type: ClusterIP
+
+---
+# NetworkPolicy to allow webhook traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-webhook-traffic
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+spec:
+  podSelector:
+    matchLabels:
+      eventlistener: saas-app-event-listener
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+
+# Made with Bob

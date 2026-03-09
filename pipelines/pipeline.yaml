@@ -1,0 +1,222 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: saas-app-pipeline
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    pipeline: build-deploy
+  annotations:
+    description: "Complete CI/CD pipeline for SaaS Customer Portal"
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+      default: https://github.com/example/saas-customer-portal.git
+    
+    - name: git-revision
+      type: string
+      description: Git revision (branch, tag, or commit SHA)
+      default: main
+    
+    - name: image-name
+      type: string
+      description: Container image name
+      default: quay.io/mcsp/saas-customer-portal
+    
+    - name: image-tag
+      type: string
+      description: Container image tag
+      default: latest
+    
+    - name: dockerfile-path
+      type: string
+      description: Path to Dockerfile
+      default: ./app/Dockerfile
+    
+    - name: context-path
+      type: string
+      description: Build context path
+      default: ./app
+    
+    - name: gitops-repo-url
+      type: string
+      description: GitOps repository URL
+      default: https://github.com/example/saas-gitops.git
+    
+    - name: gitops-repo-branch
+      type: string
+      description: GitOps repository branch
+      default: main
+    
+    - name: deployment-manifest-path
+      type: string
+      description: Path to deployment manifest in GitOps repo
+      default: gitops/overlays/dev/deployment-patch.yaml
+    
+    - name: environment
+      type: string
+      description: Target environment (dev, staging, production)
+      default: dev
+
+  workspaces:
+    - name: shared-workspace
+      description: Shared workspace for pipeline tasks
+    
+    - name: git-credentials
+      description: Git credentials for cloning repositories
+    
+    - name: registry-credentials
+      description: Container registry credentials
+
+  tasks:
+    # Task 1: Clone source code repository
+    - name: git-clone
+      taskRef:
+        name: git-clone-task
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+        - name: deleteExisting
+          value: "true"
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+        - name: ssh-directory
+          workspace: git-credentials
+
+    # Task 2: Run unit tests
+    - name: run-tests
+      taskRef:
+        name: run-tests-task
+      params:
+        - name: context-path
+          value: $(params.context-path)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      runAfter:
+        - git-clone
+
+    # Task 3: Build container image
+    - name: build-image
+      taskRef:
+        name: build-image-task
+      params:
+        - name: image-name
+          value: $(params.image-name)
+        - name: image-tag
+          value: $(params.image-tag)
+        - name: dockerfile-path
+          value: $(params.dockerfile-path)
+        - name: context-path
+          value: $(params.context-path)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: dockerconfig
+          workspace: registry-credentials
+      runAfter:
+        - run-tests
+
+    # Task 4: Security scan
+    - name: security-scan
+      taskRef:
+        name: security-scan-task
+      params:
+        - name: image-name
+          value: $(params.image-name)
+        - name: image-tag
+          value: $(params.image-tag)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      runAfter:
+        - build-image
+
+    # Task 5: Update GitOps repository
+    - name: update-gitops
+      taskRef:
+        name: update-gitops-task
+      params:
+        - name: gitops-repo-url
+          value: $(params.gitops-repo-url)
+        - name: gitops-repo-branch
+          value: $(params.gitops-repo-branch)
+        - name: image-name
+          value: $(params.image-name)
+        - name: image-tag
+          value: $(params.image-tag)
+        - name: manifest-path
+          value: $(params.deployment-manifest-path)
+        - name: environment
+          value: $(params.environment)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: ssh-directory
+          workspace: git-credentials
+      runAfter:
+        - security-scan
+
+  finally:
+    # Cleanup task that runs regardless of pipeline success/failure
+    - name: cleanup
+      taskRef:
+        name: cleanup-task
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+---
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generateName: saas-app-pipeline-run-
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    pipeline: build-deploy
+spec:
+  pipelineRef:
+    name: saas-app-pipeline
+  
+  params:
+    - name: git-url
+      value: https://github.com/example/saas-customer-portal.git
+    - name: git-revision
+      value: main
+    - name: image-name
+      value: quay.io/mcsp/saas-customer-portal
+    - name: image-tag
+      value: "$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
+    - name: environment
+      value: dev
+  
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 5Gi
+    
+    - name: git-credentials
+      secret:
+        secretName: git-credentials
+    
+    - name: registry-credentials
+      secret:
+        secretName: registry-credentials
+  
+  serviceAccountName: pipeline-sa
+  
+  timeout: 1h0m0s
+
+# Made with Bob

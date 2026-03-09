@@ -1,0 +1,33 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: saas-app-security-binding
+  namespace: open-cluster-management
+  labels:
+    app: saas-customer-portal
+placementRef:
+  name: saas-app-production-placement
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: saas-app-security-policy
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy
+
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: saas-app-resource-binding
+  namespace: open-cluster-management
+  labels:
+    app: saas-customer-portal
+placementRef:
+  name: saas-app-production-placement
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: saas-app-resource-policy
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy

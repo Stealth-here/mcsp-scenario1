@@ -1,0 +1,37 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: saas-app-prod
+
+namePrefix: prod-
+
+commonLabels:
+  environment: production
+  tier: production
+
+bases:
+  - ../../base
+
+patchesStrategicMerge:
+  - deployment-patch.yaml
+
+configMapGenerator:
+  - name: app-config
+    behavior: merge
+    literals:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=WARNING
+      - RATE_LIMIT_ENABLED=true
+      - CHECK_DB_HEALTH=true
+      - CACHE_ENABLED=true
+      - DB_ENABLED=true
+
+replicas:
+  - name: saas-customer-portal
+    count: 3
+
+images:
+  - name: saas-customer-portal
+    newName: quay.io/mcsp/saas-customer-portal
+    newTag: v1.0.0

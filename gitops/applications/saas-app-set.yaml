@@ -1,0 +1,223 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: saas-customer-portal-multicluster
+  namespace: openshift-gitops
+  labels:
+    app: saas-customer-portal
+  annotations:
+    description: "Multi-cluster deployment for SaaS Customer Portal"
+spec:
+  generators:
+    # Cluster generator - deploys to clusters based on labels
+    - clusters:
+        selector:
+          matchLabels:
+            environment: production
+            app: saas-customer-portal
+        values:
+          overlay: production
+          replicas: "3"
+    
+    - clusters:
+        selector:
+          matchLabels:
+            environment: staging
+            app: saas-customer-portal
+        values:
+          overlay: staging
+          replicas: "2"
+    
+    - clusters:
+        selector:
+          matchLabels:
+            environment: dev
+            app: saas-customer-portal
+        values:
+          overlay: dev
+          replicas: "1"
+  
+  template:
+    metadata:
+      name: 'saas-portal-{{name}}'
+      labels:
+        app: saas-customer-portal
+        environment: '{{metadata.labels.environment}}'
+        cluster: '{{name}}'
+      annotations:
+        argocd.argoproj.io/manifest-generate-paths: 'gitops/overlays/{{values.overlay}}'
+    
+    spec:
+      project: default
+      
+      source:
+        repoURL: https://github.com/example/saas-gitops.git
+        targetRevision: main
+        path: 'gitops/overlays/{{values.overlay}}'
+        
+        kustomize:
+          commonLabels:
+            cluster-name: '{{name}}'
+            cluster-region: '{{metadata.labels.region}}'
+      
+      destination:
+        server: '{{server}}'
+        namespace: 'saas-app-{{metadata.labels.environment}}'
+      
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+      
+      revisionHistoryLimit: 10
+      
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas
+
+---
+# Alternative ApplicationSet using Git generator for environment-based deployment
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: saas-customer-portal-git-based
+  namespace: openshift-gitops
+  labels:
+    app: saas-customer-portal
+    deployment-strategy: git-based
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/example/saas-gitops.git
+        revision: main
+        directories:
+          - path: gitops/overlays/*
+  
+  template:
+    metadata:
+      name: 'saas-portal-{{path.basename}}'
+      labels:
+        app: saas-customer-portal
+        environment: '{{path.basename}}'
+    
+    spec:
+      project: default
+      
+      source:
+        repoURL: https://github.com/example/saas-gitops.git
+        targetRevision: main
+        path: '{{path}}'
+      
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'saas-app-{{path.basename}}'
+      
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+
+---
+# ApplicationSet with Matrix generator for complex multi-cluster scenarios
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: saas-customer-portal-matrix
+  namespace: openshift-gitops
+  labels:
+    app: saas-customer-portal
+    deployment-strategy: matrix
+spec:
+  generators:
+    - matrix:
+        generators:
+          # First generator: environments
+          - list:
+              elements:
+                - environment: dev
+                  overlay: dev
+                  replicas: "1"
+                  autoSync: "true"
+                
+                - environment: staging
+                  overlay: staging
+                  replicas: "2"
+                  autoSync: "true"
+                
+                - environment: production
+                  overlay: production
+                  replicas: "3"
+                  autoSync: "false"
+          
+          # Second generator: clusters per environment
+          - clusters:
+              selector:
+                matchExpressions:
+                  - key: environment
+                    operator: In
+                    values: ['{{environment}}']
+  
+  template:
+    metadata:
+      name: 'saas-portal-{{environment}}-{{name}}'
+      labels:
+        app: saas-customer-portal
+        environment: '{{environment}}'
+        cluster: '{{name}}'
+        region: '{{metadata.labels.region}}'
+      annotations:
+        cluster-url: '{{server}}'
+    
+    spec:
+      project: default
+      
+      source:
+        repoURL: https://github.com/example/saas-gitops.git
+        targetRevision: main
+        path: 'gitops/overlays/{{overlay}}'
+        
+        kustomize:
+          commonLabels:
+            cluster-name: '{{name}}'
+            deployed-to: '{{metadata.labels.region}}'
+          replicas:
+            - name: saas-customer-portal
+              count: '{{replicas}}'
+      
+      destination:
+        server: '{{server}}'
+        namespace: 'saas-app-{{environment}}'
+      
+      syncPolicy:
+        automated:
+          prune: '{{autoSync}}'
+          selfHeal: '{{autoSync}}'
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+      
+      revisionHistoryLimit: 10
+
+# Made with Bob

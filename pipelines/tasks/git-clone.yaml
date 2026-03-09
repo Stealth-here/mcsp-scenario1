@@ -1,0 +1,198 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: git-clone-task
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    task-type: source-control
+  annotations:
+    description: "Clone a Git repository to the workspace"
+spec:
+  params:
+    - name: url
+      type: string
+      description: Git repository URL
+    
+    - name: revision
+      type: string
+      description: Git revision to checkout (branch, tag, sha)
+      default: main
+    
+    - name: refspec
+      type: string
+      description: Git refspec to fetch
+      default: ""
+    
+    - name: submodules
+      type: string
+      description: Initialize and fetch git submodules
+      default: "true"
+    
+    - name: depth
+      type: string
+      description: Perform a shallow clone with depth
+      default: "1"
+    
+    - name: sslVerify
+      type: string
+      description: Verify SSL certificates
+      default: "true"
+    
+    - name: subdirectory
+      type: string
+      description: Subdirectory inside workspace to clone into
+      default: ""
+    
+    - name: deleteExisting
+      type: string
+      description: Delete existing contents before cloning
+      default: "true"
+    
+    - name: httpProxy
+      type: string
+      description: HTTP proxy server
+      default: ""
+    
+    - name: httpsProxy
+      type: string
+      description: HTTPS proxy server
+      default: ""
+    
+    - name: noProxy
+      type: string
+      description: No proxy settings
+      default: ""
+    
+    - name: verbose
+      type: string
+      description: Enable verbose logging
+      default: "true"
+
+  workspaces:
+    - name: output
+      description: The git repository will be cloned into this workspace
+    
+    - name: ssh-directory
+      description: SSH credentials for Git authentication
+      optional: true
+
+  results:
+    - name: commit
+      description: The commit SHA that was fetched
+    
+    - name: url
+      description: The URL that was cloned
+    
+    - name: committer-date
+      description: The date of the commit
+
+  steps:
+    - name: clone
+      image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.40.2
+      env:
+        - name: HOME
+          value: /tekton/home
+        - name: PARAM_URL
+          value: $(params.url)
+        - name: PARAM_REVISION
+          value: $(params.revision)
+        - name: PARAM_REFSPEC
+          value: $(params.refspec)
+        - name: PARAM_SUBMODULES
+          value: $(params.submodules)
+        - name: PARAM_DEPTH
+          value: $(params.depth)
+        - name: PARAM_SSL_VERIFY
+          value: $(params.sslVerify)
+        - name: PARAM_SUBDIRECTORY
+          value: $(params.subdirectory)
+        - name: PARAM_DELETE_EXISTING
+          value: $(params.deleteExisting)
+        - name: PARAM_HTTP_PROXY
+          value: $(params.httpProxy)
+        - name: PARAM_HTTPS_PROXY
+          value: $(params.httpsProxy)
+        - name: PARAM_NO_PROXY
+          value: $(params.noProxy)
+        - name: PARAM_VERBOSE
+          value: $(params.verbose)
+        - name: WORKSPACE_OUTPUT_PATH
+          value: $(workspaces.output.path)
+        - name: WORKSPACE_SSH_DIRECTORY_BOUND
+          value: $(workspaces.ssh-directory.bound)
+        - name: WORKSPACE_SSH_DIRECTORY_PATH
+          value: $(workspaces.ssh-directory.path)
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+
+        if [ "${PARAM_VERBOSE}" = "true" ] ; then
+          set -x
+        fi
+
+        if [ "${WORKSPACE_SSH_DIRECTORY_BOUND}" = "true" ] ; then
+          cp -R "${WORKSPACE_SSH_DIRECTORY_PATH}" "${HOME}"/.ssh
+          chmod 700 "${HOME}"/.ssh
+          chmod -R 400 "${HOME}"/.ssh/*
+        fi
+
+        CHECKOUT_DIR="${WORKSPACE_OUTPUT_PATH}/${PARAM_SUBDIRECTORY}"
+
+        cleandir() {
+          if [ -d "${CHECKOUT_DIR}" ] ; then
+            rm -rf "${CHECKOUT_DIR}"
+          fi
+        }
+
+        if [ "${PARAM_DELETE_EXISTING}" = "true" ] ; then
+          cleandir
+        fi
+
+        test -z "${PARAM_HTTP_PROXY}" || export HTTP_PROXY="${PARAM_HTTP_PROXY}"
+        test -z "${PARAM_HTTPS_PROXY}" || export HTTPS_PROXY="${PARAM_HTTPS_PROXY}"
+        test -z "${PARAM_NO_PROXY}" || export NO_PROXY="${PARAM_NO_PROXY}"
+
+        /ko-app/git-init \
+          -url="${PARAM_URL}" \
+          -revision="${PARAM_REVISION}" \
+          -refspec="${PARAM_REFSPEC}" \
+          -path="${CHECKOUT_DIR}" \
+          -sslVerify="${PARAM_SSL_VERIFY}" \
+          -submodules="${PARAM_SUBMODULES}" \
+          -depth="${PARAM_DEPTH}"
+        
+        cd "${CHECKOUT_DIR}"
+        RESULT_SHA="$(git rev-parse HEAD)"
+        EXIT_CODE="$?"
+        if [ "${EXIT_CODE}" != 0 ] ; then
+          exit "${EXIT_CODE}"
+        fi
+        
+        printf "%s" "${RESULT_SHA}" > "$(results.commit.path)"
+        printf "%s" "${PARAM_URL}" > "$(results.url.path)"
+        
+        COMMITTER_DATE="$(git log -1 --pretty=%ct)"
+        printf "%s" "${COMMITTER_DATE}" > "$(results.committer-date.path)"
+
+    - name: log-clone-info
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Git Clone Task Completed"
+        echo "==================================="
+        echo "Repository: $(params.url)"
+        echo "Revision: $(params.revision)"
+        echo "Commit SHA: $(cat $(results.commit.path))"
+        echo "Committer Date: $(cat $(results.committer-date.path))"
+        echo "==================================="
+        
+        cd "$(workspaces.output.path)/$(params.subdirectory)"
+        echo "Repository contents:"
+        ls -la
+
+# Made with Bob

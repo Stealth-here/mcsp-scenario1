@@ -1,0 +1,35 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: saas-app-staging
+
+namePrefix: staging-
+
+commonLabels:
+  environment: staging
+  tier: pre-production
+
+bases:
+  - ../../base
+
+patchesStrategicMerge:
+  - deployment-patch.yaml
+
+configMapGenerator:
+  - name: app-config
+    behavior: merge
+    literals:
+      - ENVIRONMENT=staging
+      - LOG_LEVEL=INFO
+      - RATE_LIMIT_ENABLED=true
+      - CHECK_DB_HEALTH=true
+
+replicas:
+  - name: saas-customer-portal
+    count: 2
+
+images:
+  - name: saas-customer-portal
+    newName: quay.io/mcsp/saas-customer-portal
+    newTag: staging-latest

@@ -1,0 +1,41 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: saas-customer-portal
+  namespace: saas-app-prod
+  labels:
+    app: saas-customer-portal
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    cert-manager.io/acme-challenge-type: http01
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - saas-portal.example.com
+        - www.saas-portal.example.com
+      secretName: saas-customer-portal-tls
+  rules:
+    - host: saas-portal.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: saas-customer-portal
+                port:
+                  number: 8080
+    - host: www.saas-portal.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: saas-customer-portal
+                port:
+                  number: 8080

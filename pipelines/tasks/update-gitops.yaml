@@ -1,0 +1,258 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: update-gitops-task
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    task-type: gitops
+  annotations:
+    description: "Update GitOps repository with new image tag"
+spec:
+  params:
+    - name: gitops-repo-url
+      type: string
+      description: GitOps repository URL
+    
+    - name: gitops-repo-branch
+      type: string
+      description: GitOps repository branch
+      default: main
+    
+    - name: image-name
+      type: string
+      description: Container image name
+    
+    - name: image-tag
+      type: string
+      description: Container image tag
+    
+    - name: manifest-path
+      type: string
+      description: Path to the manifest file to update
+      default: gitops/overlays/dev/deployment-patch.yaml
+    
+    - name: environment
+      type: string
+      description: Target environment
+      default: dev
+    
+    - name: git-user-name
+      type: string
+      description: Git user name for commits
+      default: "Tekton Pipeline"
+    
+    - name: git-user-email
+      type: string
+      description: Git user email for commits
+      default: "tekton@pipeline.local"
+
+  workspaces:
+    - name: source
+      description: Workspace for cloning GitOps repository
+    
+    - name: ssh-directory
+      description: SSH credentials for Git authentication
+      optional: true
+
+  results:
+    - name: commit-sha
+      description: SHA of the commit created
+    
+    - name: updated-manifest
+      description: Path to the updated manifest
+
+  steps:
+    - name: clone-gitops-repo
+      image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.40.2
+      env:
+        - name: HOME
+          value: /tekton/home
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        
+        echo "==================================="
+        echo "Cloning GitOps Repository"
+        echo "==================================="
+        echo "Repository: $(params.gitops-repo-url)"
+        echo "Branch: $(params.gitops-repo-branch)"
+        echo "==================================="
+        
+        # Setup SSH if credentials provided
+        if [ -d "$(workspaces.ssh-directory.path)" ]; then
+          cp -R "$(workspaces.ssh-directory.path)" "${HOME}"/.ssh
+          chmod 700 "${HOME}"/.ssh
+          chmod -R 400 "${HOME}"/.ssh/*
+        fi
+        
+        # Clone the GitOps repository
+        GITOPS_DIR="$(workspaces.source.path)/gitops-repo"
+        rm -rf "${GITOPS_DIR}"
+        
+        /ko-app/git-init \
+          -url="$(params.gitops-repo-url)" \
+          -revision="$(params.gitops-repo-branch)" \
+          -path="${GITOPS_DIR}"
+        
+        cd "${GITOPS_DIR}"
+        echo "GitOps repository cloned successfully"
+        ls -la
+        echo "==================================="
+
+    - name: update-manifest
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Updating Manifest"
+        echo "==================================="
+        
+        GITOPS_DIR="$(workspaces.source.path)/gitops-repo"
+        cd "${GITOPS_DIR}"
+        
+        # Install yq for YAML manipulation
+        microdnf install -y wget tar gzip
+        wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        chmod +x /usr/local/bin/yq
+        
+        MANIFEST_FILE="$(params.manifest-path)"
+        NEW_IMAGE="$(params.image-name):$(params.image-tag)"
+        
+        echo "Manifest file: ${MANIFEST_FILE}"
+        echo "New image: ${NEW_IMAGE}"
+        
+        # Check if manifest exists
+        if [ ! -f "${MANIFEST_FILE}" ]; then
+          echo "Error: Manifest file not found: ${MANIFEST_FILE}"
+          echo "Available files:"
+          find . -name "*.yaml" -o -name "*.yml"
+          exit 1
+        fi
+        
+        echo "Current manifest content:"
+        cat "${MANIFEST_FILE}"
+        echo "---"
+        
+        # Update the image in the manifest
+        # This handles both Deployment and Kustomize patch formats
+        if grep -q "kind: Deployment" "${MANIFEST_FILE}"; then
+          # Standard Deployment manifest
+          yq eval ".spec.template.spec.containers[0].image = \"${NEW_IMAGE}\"" -i "${MANIFEST_FILE}"
+        else
+          # Kustomize patch format
+          yq eval ".[0].value = \"${NEW_IMAGE}\"" -i "${MANIFEST_FILE}" || \
+          yq eval ".spec.template.spec.containers[0].image = \"${NEW_IMAGE}\"" -i "${MANIFEST_FILE}"
+        fi
+        
+        echo "Updated manifest content:"
+        cat "${MANIFEST_FILE}"
+        echo "==================================="
+        
+        # Save the updated manifest path
+        echo "${MANIFEST_FILE}" > $(results.updated-manifest.path)
+
+    - name: commit-and-push
+      image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.40.2
+      env:
+        - name: HOME
+          value: /tekton/home
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        
+        echo "==================================="
+        echo "Committing and Pushing Changes"
+        echo "==================================="
+        
+        GITOPS_DIR="$(workspaces.source.path)/gitops-repo"
+        cd "${GITOPS_DIR}"
+        
+        # Setup SSH if credentials provided
+        if [ -d "$(workspaces.ssh-directory.path)" ]; then
+          cp -R "$(workspaces.ssh-directory.path)" "${HOME}"/.ssh
+          chmod 700 "${HOME}"/.ssh
+          chmod -R 400 "${HOME}"/.ssh/*
+        fi
+        
+        # Configure git
+        git config user.name "$(params.git-user-name)"
+        git config user.email "$(params.git-user-email)"
+        
+        # Check for changes
+        if git diff --quiet; then
+          echo "No changes to commit"
+          git rev-parse HEAD > $(results.commit-sha.path)
+          exit 0
+        fi
+        
+        # Stage changes
+        git add "$(params.manifest-path)"
+        
+        # Create commit message
+        COMMIT_MSG="Update $(params.environment) image to $(params.image-name):$(params.image-tag)
+
+Automated update by Tekton Pipeline
+Environment: $(params.environment)
+Image: $(params.image-name):$(params.image-tag)
+Manifest: $(params.manifest-path)"
+        
+        # Commit changes
+        git commit -m "${COMMIT_MSG}"
+        
+        # Push to remote
+        git push origin "$(params.gitops-repo-branch)"
+        
+        # Save commit SHA
+        git rev-parse HEAD > $(results.commit-sha.path)
+        
+        echo "Changes committed and pushed successfully"
+        echo "Commit SHA: $(cat $(results.commit-sha.path))"
+        echo "==================================="
+
+    - name: verify-update
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "==================================="
+        echo "Verifying GitOps Update"
+        echo "==================================="
+        
+        GITOPS_DIR="$(workspaces.source.path)/gitops-repo"
+        cd "${GITOPS_DIR}"
+        
+        # Verify the manifest was updated
+        MANIFEST_FILE="$(params.manifest-path)"
+        NEW_IMAGE="$(params.image-name):$(params.image-tag)"
+        
+        if grep -q "${NEW_IMAGE}" "${MANIFEST_FILE}"; then
+          echo "✓ Manifest successfully updated with new image"
+          echo "✓ Image: ${NEW_IMAGE}"
+        else
+          echo "✗ Warning: New image not found in manifest"
+          echo "Expected: ${NEW_IMAGE}"
+          echo "Manifest content:"
+          cat "${MANIFEST_FILE}"
+        fi
+        
+        echo "==================================="
+        echo "GitOps Update Summary"
+        echo "==================================="
+        echo "Repository: $(params.gitops-repo-url)"
+        echo "Branch: $(params.gitops-repo-branch)"
+        echo "Environment: $(params.environment)"
+        echo "Manifest: $(params.manifest-path)"
+        echo "Image: ${NEW_IMAGE}"
+        echo "Commit: $(cat $(results.commit-sha.path) 2>/dev/null || echo 'N/A')"
+        echo "==================================="
+        echo ""
+        echo "ArgoCD will automatically detect and sync these changes"
+        echo "to the target cluster based on the configured sync policy."
+        echo "==================================="
+
+# Made with Bob

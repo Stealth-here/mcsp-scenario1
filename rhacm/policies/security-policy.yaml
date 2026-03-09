@@ -1,0 +1,130 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: saas-app-security-policy
+  namespace: open-cluster-management
+  labels:
+    app: saas-customer-portal
+    policy-type: security
+  annotations:
+    policy.open-cluster-management.io/standards: NIST-CSF
+    policy.open-cluster-management.io/categories: PR.AC Identity Management Authentication and Access Control
+    policy.open-cluster-management.io/controls: PR.AC-4 Access Control
+spec:
+  disabled: false
+  remediationAction: enforce
+  
+  policy-templates:
+    # Enforce pod security standards
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: saas-app-pod-security
+        spec:
+          remediationAction: enforce
+          severity: high
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: v1
+                kind: Namespace
+                metadata:
+                  name: saas-app-prod
+                  labels:
+                    pod-security.kubernetes.io/enforce: restricted
+                    pod-security.kubernetes.io/audit: restricted
+                    pod-security.kubernetes.io/warn: restricted
+    
+    # Enforce network policies
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: saas-app-network-policy
+        spec:
+          remediationAction: enforce
+          severity: high
+          namespaceSelector:
+            include:
+              - saas-app-*
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: networking.k8s.io/v1
+                kind: NetworkPolicy
+                metadata:
+                  name: deny-all-ingress
+                  namespace: saas-app-prod
+                spec:
+                  podSelector: {}
+                  policyTypes:
+                    - Ingress
+            
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: networking.k8s.io/v1
+                kind: NetworkPolicy
+                metadata:
+                  name: allow-saas-app-ingress
+                  namespace: saas-app-prod
+                spec:
+                  podSelector:
+                    matchLabels:
+                      app: saas-customer-portal
+                  policyTypes:
+                    - Ingress
+                  ingress:
+                    - from:
+                        - namespaceSelector:
+                            matchLabels:
+                              name: openshift-ingress
+                      ports:
+                        - protocol: TCP
+                          port: 8080
+    
+    # Enforce image pull policy
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: saas-app-image-policy
+        spec:
+          remediationAction: inform
+          severity: medium
+          namespaceSelector:
+            include:
+              - saas-app-*
+          object-templates:
+            - complianceType: mustnothave
+              objectDefinition:
+                apiVersion: v1
+                kind: Pod
+                metadata:
+                  namespace: saas-app-prod
+                spec:
+                  containers:
+                    - image: "*:latest"
+    
+    # Enforce TLS for routes
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: saas-app-tls-policy
+        spec:
+          remediationAction: inform
+          severity: high
+          namespaceSelector:
+            include:
+              - saas-app-*
+          object-templates:
+            - complianceType: mustnothave
+              objectDefinition:
+                apiVersion: route.openshift.io/v1
+                kind: Route
+                metadata:
+                  namespace: saas-app-prod
+                spec:
+                  tls: null

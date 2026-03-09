@@ -1,0 +1,59 @@
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: saas-customer-portal
+  namespace: saas-app-prod
+  labels:
+    app: saas-customer-portal
+spec:
+  hosts:
+    - saas-portal.example.com
+    - www.saas-portal.example.com
+  gateways:
+    - saas-customer-portal-gateway
+  http:
+    # Canary routing - 10% to v2, 90% to v1
+    - match:
+        - headers:
+            x-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: saas-customer-portal
+            subset: v2
+          weight: 100
+    
+    # Default routing with weighted distribution
+    - route:
+        - destination:
+            host: saas-customer-portal
+            subset: v1
+          weight: 90
+        - destination:
+            host: saas-customer-portal
+            subset: v2
+          weight: 10
+      
+      retries:
+        attempts: 3
+        perTryTimeout: 2s
+        retryOn: 5xx,reset,connect-failure,refused-stream
+      
+      timeout: 10s
+      
+      corsPolicy:
+        allowOrigins:
+          - exact: https://saas-portal.example.com
+          - exact: https://www.saas-portal.example.com
+        allowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        allowHeaders:
+          - content-type
+          - authorization
+          - x-requested-with
+        maxAge: 24h

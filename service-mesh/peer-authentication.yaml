@@ -1,0 +1,71 @@
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: saas-customer-portal-mtls
+  namespace: saas-app-prod
+  labels:
+    app: saas-customer-portal
+spec:
+  selector:
+    matchLabels:
+      app: saas-customer-portal
+  mtls:
+    mode: STRICT
+
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-mtls
+  namespace: saas-app-prod
+spec:
+  mtls:
+    mode: PERMISSIVE
+
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: saas-customer-portal-authz
+  namespace: saas-app-prod
+  labels:
+    app: saas-customer-portal
+spec:
+  selector:
+    matchLabels:
+      app: saas-customer-portal
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["istio-system", "saas-app-prod"]
+      to:
+        - operation:
+            methods: ["GET", "POST", "PUT", "DELETE"]
+            paths: ["/api/*", "/health", "/ready", "/metrics"]
+    
+    - from:
+        - source:
+            principals: ["cluster.local/ns/saas-app-prod/sa/saas-app-sa"]
+      to:
+        - operation:
+            methods: ["*"]
+
+---
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: saas-customer-portal-jwt
+  namespace: saas-app-prod
+  labels:
+    app: saas-customer-portal
+spec:
+  selector:
+    matchLabels:
+      app: saas-customer-portal
+  jwtRules:
+    - issuer: "https://auth.example.com"
+      jwksUri: "https://auth.example.com/.well-known/jwks.json"
+      audiences:
+        - "saas-customer-portal"

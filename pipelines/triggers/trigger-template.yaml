@@ -1,0 +1,220 @@
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: saas-app-trigger-template
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+  annotations:
+    description: "Template for creating PipelineRun from webhook events"
+spec:
+  params:
+    - name: git-repo-url
+      description: Git repository URL
+      default: https://github.com/example/saas-customer-portal.git
+    
+    - name: git-repo-name
+      description: Git repository name
+      default: saas-customer-portal
+    
+    - name: git-revision
+      description: Git revision (commit SHA)
+      default: main
+    
+    - name: git-branch
+      description: Git branch name
+      default: main
+    
+    - name: git-commit-sha-short
+      description: Short commit SHA
+      default: latest
+    
+    - name: git-commit-message
+      description: Commit message
+      default: "Automated build"
+    
+    - name: git-author
+      description: Commit author
+      default: "Unknown"
+    
+    - name: image-tag
+      description: Container image tag
+      default: latest
+    
+    - name: environment
+      description: Target environment
+      default: dev
+
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: saas-app-pipeline-run-
+        namespace: saas-cicd
+        labels:
+          app: saas-customer-portal
+          pipeline: build-deploy
+          git-branch: $(tt.params.git-branch)
+          environment: $(tt.params.environment)
+          triggered-by: webhook
+        annotations:
+          git-repo: $(tt.params.git-repo-url)
+          git-revision: $(tt.params.git-revision)
+          git-commit-message: $(tt.params.git-commit-message)
+          git-author: $(tt.params.git-author)
+          image-tag: $(tt.params.image-tag)
+      spec:
+        pipelineRef:
+          name: saas-app-pipeline
+        
+        params:
+          - name: git-url
+            value: $(tt.params.git-repo-url)
+          
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          
+          - name: image-name
+            value: quay.io/mcsp/saas-customer-portal
+          
+          - name: image-tag
+            value: $(tt.params.image-tag)
+          
+          - name: dockerfile-path
+            value: ./app/Dockerfile
+          
+          - name: context-path
+            value: ./app
+          
+          - name: gitops-repo-url
+            value: https://github.com/example/saas-gitops.git
+          
+          - name: gitops-repo-branch
+            value: main
+          
+          - name: deployment-manifest-path
+            value: gitops/overlays/$(tt.params.environment)/deployment-patch.yaml
+          
+          - name: environment
+            value: $(tt.params.environment)
+        
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 5Gi
+                storageClassName: gp3-csi
+          
+          - name: git-credentials
+            secret:
+              secretName: git-credentials
+          
+          - name: registry-credentials
+            secret:
+              secretName: registry-credentials
+        
+        serviceAccountName: pipeline-sa
+        
+        timeout: 1h0m0s
+        
+        podTemplate:
+          securityContext:
+            fsGroup: 65532
+          nodeSelector:
+            node-role.kubernetes.io/worker: ""
+          tolerations:
+            - key: "node.kubernetes.io/not-ready"
+              operator: "Exists"
+              effect: "NoExecute"
+              tolerationSeconds: 300
+
+---
+# Alternative template for production deployments (requires approval)
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: saas-app-production-template
+  namespace: saas-cicd
+  labels:
+    app: saas-customer-portal
+    environment: production
+spec:
+  params:
+    - name: git-repo-url
+      description: Git repository URL
+    
+    - name: git-revision
+      description: Git revision (commit SHA)
+    
+    - name: image-tag
+      description: Container image tag
+    
+    - name: approved-by
+      description: Approver name
+      default: "manual-approval-required"
+
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: saas-app-prod-pipeline-run-
+        namespace: saas-cicd
+        labels:
+          app: saas-customer-portal
+          pipeline: build-deploy
+          environment: production
+          requires-approval: "true"
+        annotations:
+          approved-by: $(tt.params.approved-by)
+          git-repo: $(tt.params.git-repo-url)
+          git-revision: $(tt.params.git-revision)
+      spec:
+        pipelineRef:
+          name: saas-app-pipeline
+        
+        params:
+          - name: git-url
+            value: $(tt.params.git-repo-url)
+          
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          
+          - name: image-name
+            value: quay.io/mcsp/saas-customer-portal
+          
+          - name: image-tag
+            value: $(tt.params.image-tag)
+          
+          - name: environment
+            value: production
+          
+          - name: deployment-manifest-path
+            value: gitops/overlays/production/deployment-patch.yaml
+        
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 5Gi
+          
+          - name: git-credentials
+            secret:
+              secretName: git-credentials
+          
+          - name: registry-credentials
+            secret:
+              secretName: registry-credentials
+        
+        serviceAccountName: pipeline-sa
+        timeout: 2h0m0s
+
+# Made with Bob

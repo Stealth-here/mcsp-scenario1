@@ -1,0 +1,208 @@
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: saas-app-dev-placement
+  namespace: open-cluster-management
+  labels:
+    app: saas-customer-portal
+    environment: dev
+spec:
+  clusterSets:
+    - development
+  
+  numberOfClusters: 1
+  
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: environment
+              operator: In
+              values:
+                - dev
+                - development
+            - key: vendor
+              operator: In
+              values:
+                - OpenShift
+        claimSelector:
+          matchExpressions:
+            - key: region
+              operator: In
+              values:
+                - us-east-1
+                - us-west-2
+
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: saas-app-staging-placement
+  namespace: open-cluster-management
+  labels:
+    app: saas-customer-portal
+    environment: staging
+spec:
+  clusterSets:
+    - staging
+  
+  numberOfClusters: 2
+  
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: environment
+              operator: In
+              values:
+                - staging
+                - pre-production
+            - key: vendor
+              operator: In
+              values:
+                - OpenShift
+            - key: region
+              operator: Exists
+  
+  prioritizerPolicy:
+    mode: Exact
+    configurations:
+      - scoreCoordinate:
+          builtIn: ResourceAllocatableCPU
+        weight: 2
+      - scoreCoordinate:
+          builtIn: ResourceAllocatableMemory
+        weight: 2
+
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: saas-app-production-placement
+  namespace: open-cluster-management
+  labels:
+    app: saas-customer-portal
+    environment: production
+spec:
+  clusterSets:
+    - production
+  
+  numberOfClusters: 3
+  
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: environment
+              operator: In
+              values:
+                - production
+                - prod
+            - key: vendor
+              operator: In
+              values:
+                - OpenShift
+            - key: tier
+              operator: In
+              values:
+                - premium
+                - enterprise
+            - key: region
+              operator: Exists
+  
+  tolerations:
+    - key: node.kubernetes.io/unreachable
+      operator: Exists
+      tolerationSeconds: 300
+  
+  prioritizerPolicy:
+    mode: Exact
+    configurations:
+      - scoreCoordinate:
+          builtIn: Steady
+        weight: 3
+      - scoreCoordinate:
+          builtIn: ResourceAllocatableCPU
+        weight: 2
+      - scoreCoordinate:
+          builtIn: ResourceAllocatableMemory
+        weight: 2
+      - scoreCoordinate:
+          builtIn: AvailableReplicas
+        weight: 1
+
+---
+# Multi-region placement for high availability
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: saas-app-multiregion-placement
+  namespace: open-cluster-management
+  labels:
+    app: saas-customer-portal
+    deployment-type: multi-region
+spec:
+  clusterSets:
+    - production
+  
+  numberOfClusters: 3
+  
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: environment
+              operator: In
+              values:
+                - production
+            - key: region
+              operator: In
+              values:
+                - us-east-1
+                - us-west-2
+                - eu-west-1
+  
+  spreadPolicy:
+    spreadConstraints:
+      - maxSkew: 1
+        topologyKey: region
+        whenUnsatisfiable: DoNotSchedule
+      - maxSkew: 2
+        topologyKey: zone
+        whenUnsatisfiable: ScheduleAnyway
+
+---
+# Canary deployment placement
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: saas-app-canary-placement
+  namespace: open-cluster-management
+  labels:
+    app: saas-customer-portal
+    deployment-type: canary
+spec:
+  clusterSets:
+    - production
+  
+  numberOfClusters: 1
+  
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: environment
+              operator: In
+              values:
+                - production
+            - key: canary
+              operator: In
+              values:
+                - "true"
+            - key: region
+              operator: In
+              values:
+                - us-east-1
+
+# Made with Bob
