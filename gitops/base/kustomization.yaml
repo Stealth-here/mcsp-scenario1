@@ -40,7 +40,7 @@ configMapGenerator:
 # Images to be used (can be overridden in overlays)
 images:
   - name: saas-customer-portal
-    newName: quay.io/mcsp/saas-customer-portal
+    newName: quay.io/likithrd/saas-customer-portal
     newTag: latest
 
 # Made with Bob

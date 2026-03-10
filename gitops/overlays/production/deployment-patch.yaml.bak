@@ -1,0 +1,31 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saas-customer-portal
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: saas-customer-portal
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: LOG_LEVEL
+              value: "WARNING"
+            - name: RATE_LIMIT_ENABLED
+              value: "true"
+            - name: CHECK_DB_HEALTH
+              value: "true"
+            - name: CACHE_ENABLED
+              value: "true"
+            - name: DB_ENABLED
+              value: "true"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"

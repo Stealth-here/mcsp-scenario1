@@ -76,7 +76,7 @@ spec:
             value: $(tt.params.git-revision)
           
           - name: image-name
-            value: quay.io/mcsp/saas-customer-portal
+            value: quay.io/likithrd/saas-customer-portal
           
           - name: image-tag
             value: $(tt.params.image-tag)
@@ -185,7 +185,7 @@ spec:
             value: $(tt.params.git-revision)
           
           - name: image-name
-            value: quay.io/mcsp/saas-customer-portal
+            value: quay.io/likithrd/saas-customer-portal
           
           - name: image-tag
             value: $(tt.params.image-tag)

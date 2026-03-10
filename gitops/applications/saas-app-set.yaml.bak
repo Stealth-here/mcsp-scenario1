@@ -52,7 +52,7 @@ spec:
       project: default
       
       source:
-        repoURL: https://github.com/Stealth-here/mcsp-scenario1.git
+        repoURL: https://github.com/example/saas-gitops.git
         targetRevision: main
         path: 'gitops/overlays/{{values.overlay}}'
         
@@ -118,7 +118,7 @@ spec:
       project: default
       
       source:
-        repoURL: https://github.com/Stealth-here/mcsp-scenario1.git
+        repoURL: https://github.com/example/saas-gitops.git
         targetRevision: main
         path: '{{path}}'
       
@@ -188,7 +188,7 @@ spec:
       project: default
       
       source:
-        repoURL: https://github.com/Stealth-here/mcsp-scenario1.git
+        repoURL: https://github.com/example/saas-gitops.git
         targetRevision: main
         path: 'gitops/overlays/{{overlay}}'
         

@@ -36,7 +36,7 @@ spec:
       
       containers:
         - name: saas-customer-portal
-          image: quay.io/mcsp/saas-customer-portal:latest
+          image: quay.io/likithrd/saas-customer-portal:latest
           imagePullPolicy: Always
           
           ports:

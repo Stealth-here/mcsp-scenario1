@@ -30,5 +30,5 @@ replicas:
 
 images:
   - name: saas-customer-portal
-    newName: quay.io/mcsp/saas-customer-portal
+    newName: quay.io/likithrd/saas-customer-portal
     newTag: dev-latest
